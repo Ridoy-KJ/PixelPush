@@ -1,0 +1,26 @@
+{
+  "name": "casparcg-control-server",
+  "version": "1.0.0",
+  "description": "CasparCG AMCP Broadcast Control Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "build": "cd client && npm run build",
+    "start:prod": "npm run build && node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "casparcg-connection": "^5.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "tslib": "^2.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
