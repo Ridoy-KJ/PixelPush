@@ -350,7 +350,7 @@ app.get("/api/preview", async (req, res) => {
   }
 
   // Normalise: strip leading slash, ensure no double-slash
-  const safePath = String(template).replace(/^\/+/, "");
+  const safePath = String(template).replace(/^\/+/, "").toLowerCase();
   const templateUrl = `${TEMPLATE_PREVIEW_BASE}/${safePath}.html`;
 
   try {
