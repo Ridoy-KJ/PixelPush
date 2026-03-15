@@ -17,6 +17,7 @@ const PORT = process.env.PORT || 4000;
 const CASPAR_HOST = process.env.CASPAR_HOST || "192.168.25.100";
 const CASPAR_PORT = parseInt(process.env.CASPAR_PORT || "5250");
 const SCANNER_BASE = process.env.SCANNER_BASE || "http://192.168.25.100:8000/tls";
+const TEMPLATE_PREVIEW_BASE = process.env.TEMPLATE_PREVIEW_BASE || `http://${CASPAR_HOST}:8080/templates`;
 
 // ─── Express + HTTP + Socket.io Bootstrap ────────────────────────────────────
 const app = express();
@@ -335,6 +336,69 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[Socket.io] Client disconnected: ${socket.id}`);
   });
+});
+
+// ─── REST: Template Preview Proxy ────────────────────────────────────────────
+// Fetches the HTML template from CasparCG and serves it from the SAME origin
+// as the dashboard, so the browser allows iframe.contentWindow.play() / .stop().
+// Relative asset paths inside the template are rewritten to absolute CasparCG URLs
+// so images/fonts/scripts resolve correctly inside the iframe.
+app.get("/api/preview", async (req, res) => {
+  const { template } = req.query;
+  if (!template) {
+    return res.status(400).send("Missing ?template= param");
+  }
+
+  // Normalise: strip leading slash, ensure no double-slash
+  const safePath = String(template).replace(/^\/+/, "");
+  const templateUrl = `${TEMPLATE_PREVIEW_BASE}/${safePath}.html`;
+
+  try {
+    const { data } = await axios.get(templateUrl, {
+      timeout: 7000,
+      responseType: "text",
+      transformResponse: [(d) => d], // raw string — don't let axios parse it
+    });
+
+    // Rewrite every relative src/href so assets load from CasparCG, not localhost
+    const base = TEMPLATE_PREVIEW_BASE.replace(/\/$/, "");
+    const rewritten = String(data)
+      // src="..." and href="..." — skip absolute URLs and data URIs
+      .replace(
+        /(src|href)=(["'])(?!https?:\/\/|\/\/|data:|#)([^"']+)\2/g,
+        (_, attr, quote, path) => `${attr}=${quote}${base}/${path.replace(/^\//, "")}${quote}`
+      )
+      // url(...) inside inline styles / CSS
+      .replace(
+        /url\((?!['"]?(?:https?:\/\/|\/\/|data:))(['"]?)([^)'"]+)\1\)/g,
+        (_, quote, path) => `url(${quote}${base}/${path.replace(/^\//, "")}${quote})`
+      );
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    // Allow this page to be iframed by our own origin only
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.send(rewritten);
+  } catch (err) {
+    console.error("[Preview proxy] Failed to fetch:", templateUrl, err.message);
+    res.status(502).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><style>
+          body { background: #0a0b0d; color: #ef4444; font-family: monospace;
+                 padding: 24px; margin: 0; }
+          h3   { color: #f59e0b; margin: 0 0 12px; letter-spacing: 2px; }
+          code { background: #111318; padding: 2px 6px; border-radius: 3px;
+                 color: #e2e8f0; }
+        </style></head>
+        <body>
+          <h3>PREVIEW ERROR</h3>
+          <p>Could not fetch template from CasparCG:</p>
+          <code>${templateUrl}</code>
+          <p style="color:#64748b;margin-top:12px">${err.message}</p>
+        </body>
+      </html>
+    `);
+  }
 });
 
 // SPA fallback: serve index.html for non-API routes (production)

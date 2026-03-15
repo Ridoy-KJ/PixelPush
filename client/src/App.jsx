@@ -318,6 +318,7 @@ const STYLE = `
     text-transform: uppercase;
     color: var(--muted);
   }
+  /* Container div: clips to 960×540 (half of 1920×1080 broadcast canvas) */
   .preview-frame {
     width: 960px;
     height: 540px;
@@ -326,15 +327,19 @@ const STYLE = `
     background: #000;
     position: relative;
     overflow: hidden;
+    flex-shrink: 0;
   }
+  /* The actual iframe is full 1920×1080 and scaled 50% inside the container */
   .preview-frame iframe {
     position: absolute;
-    left: -480px;
-    top: -270px;
+    top: 0;
+    left: 0;
     width: 1920px;
     height: 1080px;
-    transform: scale(.5);
+    transform: scale(0.5);
     transform-origin: top left;
+    border: none;
+    background: #000;
   }
 
   /* ── Transport bar ── */
@@ -790,20 +795,31 @@ export default function App() {
   }, []);
 
   // ── Preview controls ─────────────────────────────────────────────────────────
+  // Use the /api/preview proxy (same origin) instead of a direct CasparCG URL.
+  // Same-origin is required so the browser allows iframe.contentWindow.play/stop().
   const previewUrl = selectedTemplate
-    ? `${TEMPLATE_PREVIEW_BASE}/${String(selectedTemplate.path || selectedTemplate.name).toLowerCase()}.html`
+    ? `/api/preview?template=${encodeURIComponent(
+        String(selectedTemplate.path || selectedTemplate.name)
+      )}`
     : null;
 
   const handlePreviewPlay = () => {
     if (!iframeRef.current) return;
     try {
       const win = iframeRef.current.contentWindow;
-      if (win && typeof win.play === "function") {
+      if (!win) { addToast("Preview not ready", "error"); return; }
+      // Direct call works because the proxy serves it same-origin
+      if (typeof win.play === "function") {
         win.play();
+        devLog("preview_play", { method: "direct" });
+      } else {
+        // Fallback: some templates listen for postMessage instead
+        win.postMessage({ action: "play" }, "*");
+        devLog("preview_play", { method: "postMessage" });
       }
     } catch (e) {
       console.error("Preview play failed", e);
-      addToast("Preview play failed", "error");
+      addToast("Preview play failed — check console", "error");
     }
   };
 
@@ -811,12 +827,17 @@ export default function App() {
     if (!iframeRef.current) return;
     try {
       const win = iframeRef.current.contentWindow;
-      if (win && typeof win.stop === "function") {
+      if (!win) { addToast("Preview not ready", "error"); return; }
+      if (typeof win.stop === "function") {
         win.stop();
+        devLog("preview_stop", { method: "direct" });
+      } else {
+        win.postMessage({ action: "stop" }, "*");
+        devLog("preview_stop", { method: "postMessage" });
       }
     } catch (e) {
       console.error("Preview stop failed", e);
-      addToast("Preview stop failed", "error");
+      addToast("Preview stop failed — check console", "error");
     }
   };
 
@@ -1117,13 +1138,14 @@ export default function App() {
                   </button>
                 </div>
                 {selectedTemplate && previewUrl ? (
-                  <iframe
-                    key={previewUrl}
-                    ref={iframeRef}
-                    className="preview-frame"
-                    src={previewUrl}
-                    title="Template preview"
-                  />
+                  <div className="preview-frame">
+                    <iframe
+                      key={previewUrl}
+                      ref={iframeRef}
+                      src={previewUrl}
+                      title="Template preview"
+                    />
+                  </div>
                 ) : (
                   <div className="empty-state">
                     <div className="empty-state__icon">⌘</div>
