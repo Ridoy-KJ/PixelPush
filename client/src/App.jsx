@@ -241,7 +241,6 @@ const STYLE = `
   /* ── Main ── */
   .main {
     display: grid;
-    grid-template-rows: 1fr 160px;
     overflow: hidden;
   }
 
@@ -463,7 +462,6 @@ const STYLE = `
   .playlist-header,
   .playlist-row {
     display: grid;
-    grid-template-columns: 40px 1.6fr 0.7fr 110px 120px;
     gap: 8px;
     align-items: center;
     padding: 6px 10px;
@@ -640,6 +638,135 @@ const STYLE = `
     animation: spin .7s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Playlist — updated column layout ── */
+  .playlist-header,
+  .playlist-row {
+    grid-template-columns: 32px 1.4fr 0.55fr 118px 105px;
+  }
+
+  /* ── Playlist status cell (air badge + timer + count) ── */
+  .playlist-row__status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    min-width: 0;
+  }
+  .playlist-row__timer {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-2);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    letter-spacing: 0.5px;
+  }
+  .playlist-row__count {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--muted);
+  }
+
+  /* ── Main — auto bottom row so log can flex ── */
+  .main { grid-template-rows: 1fr auto; }
+
+  /* ── Log panel ── */
+  .log-panel {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: height .18s ease;
+    flex-shrink: 0;
+  }
+  .log-panel.expanded  { height: 154px; }
+  .log-panel.minimized { height: 34px;  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    height: 34px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .log-header__title {
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .log-header__live {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .log-header__live b { color: var(--accent); font-weight: 500; }
+  .log-minimize-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--muted);
+    font-size: 10px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-weight: 500;
+    transition: all .1s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .log-minimize-btn:hover { border-color: var(--border-strong); color: var(--text); }
+
+  .log-entries {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .log-entries::-webkit-scrollbar { width: 4px; }
+  .log-entries::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-entry {
+    display: grid;
+    grid-template-columns: 68px 42px 1fr 64px;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 16px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry__time  { color: var(--muted); }
+  .log-entry__event { font-weight: 500; letter-spacing: 0.5px; }
+  .log-entry__event.play { color: var(--green); }
+  .log-entry__event.stop { color: var(--red);   }
+  .log-entry__template {
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .log-entry__route { color: var(--accent); text-align: right; }
+
+  .log-empty {
+    padding: 14px 16px;
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: var(--muted);
+  }
 `;
 
 // ─── Inject styles ────────────────────────────────────────────────────────────
@@ -701,10 +828,19 @@ export default function App() {
   // Preview iframe
   const iframeRef = useRef(null);
 
-  // Activity
-  const [lastCommand, setLastCommand] = useState(null);
+  // Air log (replaces lastCommand)
+  const [airLog, setAirLog] = useState([]);
+  const [logMinimized, setLogMinimized] = useState(false);
+  const airLogId = useRef(1);
 
-  // Playlist (CGClient_OK-style, simplified)
+  // Tick every second for real-time on-air timers
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Playlist
   const [playlist, setPlaylist] = useState([]);
   const [selectedRow, setSelectedRow] = useState(null);
   const nextRowId = useRef(1);
@@ -727,16 +863,10 @@ export default function App() {
       setConnected(c);
       setConnecting(false);
       addToast(c ? "CasparCG Online" : "CasparCG Offline", c ? "ok" : "error");
-       devLog("caspar_status", { connected: c });
+      devLog("caspar_status", { connected: c });
     });
-    socket.on("command_sent", (payload) => {
-      setLastCommand(payload.command);
-      devLog("amcp_ok", payload);
-    });
-    socket.on("command_error", (payload) => {
-      addToast(`Error: ${payload.error}`, "error");
-      devLog("amcp_error", payload);
-    });
+    socket.on("command_sent",  (p) => devLog("amcp_ok",    p));
+    socket.on("command_error", (p) => { addToast(`Error: ${p.error}`, "error"); devLog("amcp_error", p); });
     return () => socket.removeAllListeners();
   }, []);
 
@@ -856,59 +986,96 @@ export default function App() {
     });
   };
 
+  // ── Air log helper ───────────────────────────────────────────────────────────
+  const addToAirLog = useCallback((event, template, ch, ly) => {
+    const now = new Date();
+    const ts = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setAirLog((prev) => [
+      { id: airLogId.current++, event, template: String(template), channel: ch, layer: ly, ts },
+      ...prev,
+    ].slice(0, 40));
+  }, []);
+
   // ── Playlist helpers ─────────────────────────────────────────────────────────
   const handleAddToPlaylist = () => {
-    if (!selectedTemplate) {
-      addToast("Select a template first", "error");
-      return;
-    }
+    if (!selectedTemplate) { addToast("Select a template first", "error"); return; }
     const ch = parseInt(channel) || DEFAULT_CHANNEL;
-    const ly = parseInt(layer) || DEFAULT_LAYER;
+    const ly = parseInt(layer)   || DEFAULT_LAYER;
     const row = {
       id: nextRowId.current++,
       template: selectedTemplate,
-      channel: ch,
-      layer: ly,
+      channel: ch, layer: ly,
       onAir: false,
+      playCount: 0,
+      airStartTime: null,
     };
     setPlaylist((p) => [...p, row]);
     setSelectedRow(row.id);
     devLog("playlist_add", { row });
   };
 
-  const markOnAir = (rowId) => {
-    setPlaylist((rows) =>
-      rows.map((r) => (r.id === rowId ? { ...r, onAir: true } : { ...r, onAir: false }))
-    );
-  };
-
   const handleRowPlay = (row) => {
-    setChannel(String(row.channel));
-    setLayer(String(row.layer));
+    if (!connected) { addToast("CasparCG not connected", "error"); return; }
+    const tplPath = row.template.path || row.template.name;
+
+    // Update playlist: mark this row on-air, clear any other row using same ch-layer
+    setPlaylist((rows) => rows.map((r) => {
+      if (r.id === row.id) {
+        return { ...r, onAir: true, playCount: r.playCount + 1, airStartTime: Date.now() };
+      }
+      // Same output target → clear its AIR flag (they'd overlap on CasparCG anyway)
+      if (r.channel === row.channel && r.layer === row.layer) {
+        return { ...r, onAir: false, airStartTime: null };
+      }
+      return r;
+    }));
+
     setSelectedTemplate(row.template);
-    emit("PLAY_TEMPLATE", {
-      channel: row.channel,
-      layer: row.layer,
-      template: row.template.path || row.template.name,
-    });
-    markOnAir(row.id);
+    socket.emit(
+      "PLAY_TEMPLATE",
+      { channel: row.channel, layer: row.layer, template: tplPath, data: {} },
+      (ack) => {
+        if (ack?.success) addToAirLog("PLAY", tplPath, row.channel, row.layer);
+        else addToast(ack?.error || "Play failed", "error");
+      }
+    );
     devLog("playlist_play", { rowId: row.id });
   };
 
   const handleRowStop = (row) => {
-    emit("STOP_LAYER", { channel: row.channel, layer: row.layer, template: undefined });
+    if (!connected) { addToast("CasparCG not connected", "error"); return; }
+    const tplPath = row.template.path || row.template.name;
+
     setPlaylist((rows) =>
-      rows.map((r) => (r.id === row.id ? { ...r, onAir: false } : r))
+      rows.map((r) => r.id === row.id ? { ...r, onAir: false, airStartTime: null } : r)
+    );
+    socket.emit(
+      "STOP_LAYER",
+      { channel: row.channel, layer: row.layer },
+      (ack) => {
+        if (ack?.success) addToAirLog("STOP", tplPath, row.channel, row.layer);
+        else addToast(ack?.error || "Stop failed", "error");
+      }
     );
     devLog("playlist_stop", { rowId: row.id });
   };
 
+  const handleRowRemove = (row) => {
+    // If currently on air, send a stop command first
+    if (row.onAir) {
+      socket.emit("STOP_LAYER", { channel: row.channel, layer: row.layer });
+      addToAirLog("STOP", row.template.path || row.template.name, row.channel, row.layer);
+    }
+    setPlaylist((p) => p.filter((r) => r.id !== row.id));
+    if (selectedRow === row.id) setSelectedRow(null);
+    devLog("playlist_remove", { rowId: row.id });
+  };
+
   const handleRowPreview = (row) => {
+    setSelectedTemplate(row.template);
     setChannel(String(row.channel));
     setLayer(String(row.layer));
-    setSelectedTemplate(row.template);
-    // fire local preview play after iframe loads
-    setTimeout(() => handlePreviewPlay(), 200);
+    setTimeout(() => handlePreviewPlay(), 220);
     devLog("playlist_preview", { rowId: row.id });
   };
 
@@ -1023,90 +1190,89 @@ export default function App() {
 
             {/* Playlist */}
             <div>
-              <div className="section-label">
-                Playlist
-              </div>
+              <div className="section-label">Playlist</div>
               <div className="playlist">
                 <div className="playlist-header">
                   <div>#</div>
                   <div>Template</div>
                   <div>Route</div>
                   <div>Controls</div>
-                  <div>AIR</div>
+                  <div style={{ textAlign: "right" }}>Status</div>
                 </div>
                 {playlist.length === 0 && (
                   <div className="playlist-row">
                     <div className="playlist-row__index">–</div>
                     <div className="playlist-row__template" style={{ color: "var(--muted)" }}>
-                      No items yet. Add from Selected Template.
+                      No items — select a template and click Add
                     </div>
-                    <div />
-                    <div />
-                    <div />
+                    <div /><div /><div />
                   </div>
                 )}
-                {playlist.map((row, idx) => (
-                  <div
-                    key={row.id}
-                    className="playlist-row"
-                    onClick={() => setSelectedRow(row.id)}
-                    style={
-                      row.id === selectedRow
-                        ? { boxShadow: "inset 0 0 0 1px rgba(59,130,246,.65)" }
-                        : undefined
-                    }
-                  >
-                    <div className="playlist-row__index">{idx + 1}</div>
-                    <div className="playlist-row__template">
-                      {row.template.path || row.template.name}
+                {playlist.map((row, idx) => {
+                  // Real-time on-air duration — tick dependency forces re-render each second
+                  void tick;
+                  const elapsed = row.airStartTime
+                    ? Math.floor((Date.now() - row.airStartTime) / 1000)
+                    : 0;
+                  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+                  const ss = String(elapsed % 60).padStart(2, "0");
+
+                  return (
+                    <div
+                      key={row.id}
+                      className="playlist-row"
+                      onClick={() => setSelectedRow(row.id)}
+                      style={row.id === selectedRow
+                        ? { background: "var(--accent-dim)", borderLeft: "3px solid var(--accent)" }
+                        : undefined}
+                    >
+                      <div className="playlist-row__index">{idx + 1}</div>
+                      <div className="playlist-row__template" title={row.template.path}>
+                        {row.template.path || row.template.name}
+                      </div>
+                      <div className="playlist-row__route">{row.channel}-{row.layer}</div>
+                      <div className="playlist-row__actions">
+                        {/* Play */}
+                        <button className="btn btn-play btn-sm" disabled={!connected}
+                          onClick={(e) => { e.stopPropagation(); handleRowPlay(row); }}>
+                          ▶
+                        </button>
+                        {/* Stop */}
+                        <button className="btn btn-stop btn-sm" disabled={!connected || !row.onAir}
+                          onClick={(e) => { e.stopPropagation(); handleRowStop(row); }}>
+                          ■
+                        </button>
+                        {/* Preview */}
+                        <button className="btn btn-ghost btn-sm" title="Load in preview"
+                          onClick={(e) => { e.stopPropagation(); handleRowPreview(row); }}>
+                          ⊙
+                        </button>
+                        {/* Remove */}
+                        <button className="btn btn-ghost btn-sm" title="Remove from playlist"
+                          style={{ color: "var(--red)", borderColor: "var(--red)" }}
+                          onClick={(e) => { e.stopPropagation(); handleRowRemove(row); }}>
+                          ✕
+                        </button>
+                      </div>
+                      <div className="playlist-row__status">
+                        {row.onAir && (
+                          <>
+                            <div className="playlist-row__air">AIR</div>
+                            <div className="playlist-row__timer">{mm}:{ss}</div>
+                          </>
+                        )}
+                        {row.playCount > 0 && (
+                          <div className="playlist-row__count">×{row.playCount} plays</div>
+                        )}
+                      </div>
                     </div>
-                    <div className="playlist-row__route">
-                      {row.channel}-{row.layer}
-                    </div>
-                    <div className="playlist-row__actions">
-                      <button
-                        className="btn btn-amber btn-sm"
-                        disabled={!connected}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRowPlay(row);
-                        }}
-                      >
-                        ▶
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        disabled={!connected}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRowStop(row);
-                        }}
-                      >
-                        ■
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRowPreview(row);
-                        }}
-                      >
-                        ⌘
-                      </button>
-                    </div>
-                    <div>
-                      {row.onAir && <div className="playlist-row__air">AIR</div>}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  className="btn btn-amber btn-sm"
-                  onClick={handleAddToPlaylist}
-                  disabled={!selectedTemplate}
-                >
-                  + Add from selection
+                <button className="btn btn-amber btn-sm"
+                  onClick={handleAddToPlaylist} disabled={!selectedTemplate}>
+                  + Add to playlist
                 </button>
               </div>
             </div>
@@ -1151,42 +1317,43 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── Transport bar ── */}
-          <div className="transport-bar">
-            <div className="transport-label">Transport</div>
-
-            <button
-              className="btn btn-play"
-              disabled={!connected || !selectedTemplate}
-              onClick={() => emit("PLAY_TEMPLATE")}
-            >
-              ▶ F0 Play
-            </button>
-
-            <button
-              className="btn btn-update"
-              disabled={!connected || !selectedTemplate}
-              onClick={() => emit("UPDATE_TEMPLATE")}
-            >
-              ⟳ F1 Update
-            </button>
-
-            <button
-              className="btn btn-stop"
-              disabled={!connected}
-              onClick={() => emit("STOP_LAYER", { template: undefined })}
-            >
-              ■ Stop
-            </button>
-
-            <div className="transport-spacer" />
-
-            {lastCommand && (
-              <div className="last-cmd">
-                <span>AMCP › </span>{lastCommand}
+          {/* ── Log panel (replaces transport bar) ── */}
+          {(() => {
+            const latest = airLog[0];
+            return (
+              <div className={`log-panel ${logMinimized ? "minimized" : "expanded"}`}>
+                <div className="log-header">
+                  <span className="log-header__title">Air Log</span>
+                  {latest ? (
+                    <span className="log-header__live">
+                      <b>{latest.event}</b>
+                      {" · "}{latest.template}{" · "}{latest.channel}-{latest.layer}{" · "}{latest.ts}
+                    </span>
+                  ) : (
+                    <span className="log-header__live">No commands sent yet</span>
+                  )}
+                  <button className="log-minimize-btn"
+                    onClick={() => setLogMinimized((m) => !m)}>
+                    {logMinimized ? "▲ Expand" : "▼ Minimise"}
+                  </button>
+                </div>
+                {!logMinimized && (
+                  <div className="log-entries">
+                    {airLog.length === 0 ? (
+                      <div className="log-empty">Play or stop a template to see events here.</div>
+                    ) : airLog.map((e) => (
+                      <div key={e.id} className="log-entry">
+                        <span className="log-entry__time">{e.ts}</span>
+                        <span className={`log-entry__event ${e.event.toLowerCase()}`}>{e.event}</span>
+                        <span className="log-entry__template" title={e.template}>{e.template}</span>
+                        <span className="log-entry__route">{e.channel}-{e.layer}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })()}
         </main>
 
         <footer className="footer">
